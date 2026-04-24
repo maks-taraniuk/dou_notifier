@@ -1,0 +1,19 @@
+services:
+  dou-rss-notifier:
+    build: .
+    container_name: dou-rss-notifier
+    restart: unless-stopped
+    environment:
+      RSS_URL: ${RSS_URL:-https://jobs.dou.ua/vacancies/feeds/?descr=1&category=Android}
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-300}
+      FIRST_RUN_SEND_EXISTING: ${FIRST_RUN_SEND_EXISTING:-false}
+      MAX_ITEMS_PER_POLL: ${MAX_ITEMS_PER_POLL:-20}
+      MAX_SUMMARY_CHARS: ${MAX_SUMMARY_CHARS:-1200}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - dou-rss-data:/data
+
+volumes:
+  dou-rss-data:
