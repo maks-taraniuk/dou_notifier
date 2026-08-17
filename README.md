@@ -74,8 +74,6 @@ TELEGRAM_BOT_TOKEN=your-real-token
 
 No inbound port is needed. The container only makes outgoing requests to DOU RSS and Telegram API.
 
-`TELEGRAM_CHAT_ID` remains optional for existing deployments: its value is added to the subscriber list at startup. New users do not need to share their chat IDs; they only need to send `/start`.
-
 ## Run Without Docker
 
 This script has no external Python dependencies, so it can also run directly:

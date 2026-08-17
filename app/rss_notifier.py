@@ -324,7 +324,6 @@ def main() -> int:
     first_run_send_existing = getenv_bool("FIRST_RUN_SEND_EXISTING", False)
     run_once_only = getenv_bool("RUN_ONCE", False)
     telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    legacy_chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
     logging.info("Watching RSS feed: %s", rss_url)
 
@@ -340,10 +339,6 @@ def main() -> int:
                     update_offset_file=update_offset_file,
                     timeout=http_timeout,
                 )
-                if legacy_chat_id and legacy_chat_id not in subscribers:
-                    subscribers.add(legacy_chat_id)
-                    save_subscribers(subscribers_file, subscribers)
-                    logging.info("Migrated TELEGRAM_CHAT_ID into subscribers")
 
             run_once(
                 rss_url=rss_url,
