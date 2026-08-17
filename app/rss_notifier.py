@@ -13,7 +13,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional, Union
 
 
 DEFAULT_RSS_URL = "https://jobs.dou.ua/vacancies/feeds/?descr=1&category=Android"
@@ -142,6 +142,87 @@ def save_seen(path: Path, seen: Iterable[str]) -> None:
     tmp_path.replace(path)
 
 
+def load_subscribers(path: Path) -> set[str]:
+    return load_seen(path)
+
+
+def save_subscribers(path: Path, subscribers: Iterable[str]) -> None:
+    save_seen(path, subscribers)
+
+
+def load_update_offset(path: Path) -> Optional[int]:
+    if not path.exists():
+        return None
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return int(raw["offset"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError) as exc:
+        logging.warning("Could not read Telegram update offset %s: %s", path, exc)
+        return None
+
+
+def save_update_offset(path: Path, offset: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps({"offset": offset}), encoding="utf-8")
+    tmp_path.replace(path)
+
+
+def telegram_request(
+    token: str,
+    method: str,
+    timeout: int,
+    data: Optional[dict[str, Union[str, int]]] = None,
+) -> dict:
+    endpoint = f"https://api.telegram.org/bot{token}/{method}"
+    body = urllib.parse.urlencode(data or {}).encode("utf-8") if data else None
+    request = urllib.request.Request(endpoint, data=body, method="POST")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+
+    if not payload.get("ok"):
+        raise RuntimeError(f"Telegram API {method} failed: {payload}")
+    return payload
+
+
+def is_start_command(text: object) -> bool:
+    if not isinstance(text, str):
+        return False
+    parts = text.strip().split(maxsplit=1)
+    return bool(parts) and parts[0].split("@", 1)[0] == "/start"
+
+
+def sync_subscribers(token: str, subscribers_file: Path, update_offset_file: Path, timeout: int) -> set[str]:
+    subscribers = load_subscribers(subscribers_file)
+    offset = load_update_offset(update_offset_file)
+    request_data: dict[str, Union[str, int]] = {
+        "timeout": 0,
+        "allowed_updates": '["message"]',
+    }
+    if offset is not None:
+        request_data["offset"] = offset
+
+    response = telegram_request(token, "getUpdates", timeout, request_data)
+    for update in response["result"]:
+        update_id = update.get("update_id")
+        if isinstance(update_id, int):
+            save_update_offset(update_offset_file, update_id + 1)
+
+        message = update.get("message", {})
+        chat_id = message.get("chat", {}).get("id")
+        if chat_id is None or not is_start_command(message.get("text")):
+            continue
+
+        chat_id = str(chat_id)
+        if chat_id not in subscribers:
+            subscribers.add(chat_id)
+            save_subscribers(subscribers_file, subscribers)
+            logging.info("Registered Telegram subscriber: %s", chat_id)
+
+    return subscribers
+
+
 def build_message(item: FeedItem, max_summary_chars: int) -> str:
     lines = [
         f"<b>{html.escape(item.title)}</b>",
@@ -164,25 +245,18 @@ def build_message(item: FeedItem, max_summary_chars: int) -> str:
     return "\n".join(lines)
 
 
-def send_telegram(message: str, timeout: int) -> None:
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-    if not token or not chat_id:
-        logging.info("Telegram is not configured; would send:\n%s", message)
-        return
-
-    endpoint = f"https://api.telegram.org/bot{token}/sendMessage"
-    body = urllib.parse.urlencode(
+def send_telegram(token: str, chat_id: str, message: str, timeout: int) -> None:
+    telegram_request(
+        token,
+        "sendMessage",
+        timeout,
         {
             "chat_id": chat_id,
             "text": message,
             "parse_mode": "HTML",
             "disable_web_page_preview": "false",
-        }
-    ).encode("utf-8")
-    request = urllib.request.Request(endpoint, data=body, method="POST")
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        response.read()
+        },
+    )
 
 
 def run_once(
@@ -192,6 +266,8 @@ def run_once(
     max_items_per_poll: int,
     max_summary_chars: int,
     http_timeout: int,
+    telegram_token: str,
+    subscribers: Iterable[str],
 ) -> None:
     seen = load_seen(state_file)
     payload = http_get(rss_url, timeout=http_timeout)
@@ -221,7 +297,11 @@ def run_once(
 
     for item in reversed(new_items):
         message = build_message(item, max_summary_chars=max_summary_chars)
-        send_telegram(message, timeout=http_timeout)
+        for chat_id in subscribers:
+            try:
+                send_telegram(telegram_token, str(chat_id), message, timeout=http_timeout)
+            except (urllib.error.URLError, TimeoutError, OSError, RuntimeError) as exc:
+                logging.warning("Could not send notification to %s: %s", chat_id, exc)
         seen.add(item.item_id)
         save_seen(state_file, seen)
         logging.info("Sent notification for: %s", item.title)
@@ -235,17 +315,36 @@ def main() -> int:
 
     rss_url = os.getenv("RSS_URL", DEFAULT_RSS_URL).strip() or DEFAULT_RSS_URL
     state_file = Path(os.getenv("STATE_FILE", "/data/seen.json"))
+    subscribers_file = Path(os.getenv("SUBSCRIBERS_FILE", "/data/subscribers.json"))
+    update_offset_file = Path(os.getenv("TELEGRAM_UPDATE_OFFSET_FILE", "/data/telegram_updates.json"))
     poll_interval = getenv_int("POLL_INTERVAL_SECONDS", 300)
     http_timeout = getenv_int("HTTP_TIMEOUT_SECONDS", 20)
     max_items_per_poll = getenv_int("MAX_ITEMS_PER_POLL", 20)
     max_summary_chars = getenv_int("MAX_SUMMARY_CHARS", 1200)
     first_run_send_existing = getenv_bool("FIRST_RUN_SEND_EXISTING", False)
     run_once_only = getenv_bool("RUN_ONCE", False)
+    telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    legacy_chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
     logging.info("Watching RSS feed: %s", rss_url)
 
     while True:
         try:
+            if not telegram_token:
+                logging.warning("TELEGRAM_BOT_TOKEN is not configured; notifications are disabled")
+                subscribers: set[str] = set()
+            else:
+                subscribers = sync_subscribers(
+                    token=telegram_token,
+                    subscribers_file=subscribers_file,
+                    update_offset_file=update_offset_file,
+                    timeout=http_timeout,
+                )
+                if legacy_chat_id and legacy_chat_id not in subscribers:
+                    subscribers.add(legacy_chat_id)
+                    save_subscribers(subscribers_file, subscribers)
+                    logging.info("Migrated TELEGRAM_CHAT_ID into subscribers")
+
             run_once(
                 rss_url=rss_url,
                 state_file=state_file,
@@ -253,8 +352,10 @@ def main() -> int:
                 max_items_per_poll=max_items_per_poll,
                 max_summary_chars=max_summary_chars,
                 http_timeout=http_timeout,
+                telegram_token=telegram_token,
+                subscribers=subscribers,
             )
-        except (ET.ParseError, urllib.error.URLError, TimeoutError, OSError) as exc:
+        except (ET.ParseError, urllib.error.URLError, TimeoutError, OSError, RuntimeError) as exc:
             logging.exception("Polling failed: %s", exc)
 
         if run_once_only:

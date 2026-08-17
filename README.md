@@ -1,6 +1,6 @@
 # DOU RSS Notifier
 
-Small Docker container that watches the DOU Android vacancies RSS feed and sends new vacancies to Telegram.
+Small Docker container that watches the DOU Android vacancies RSS feed and sends new vacancies to every Telegram user who has sent `/start` to the bot.
 
 Default feed:
 
@@ -11,25 +11,19 @@ https://jobs.dou.ua/vacancies/feeds/?descr=1&category=Android
 ## Setup
 
 1. Create Telegram bot with `@BotFather`.
-2. Send any message to the bot.
-3. Open this URL in a browser, replacing `<YOUR_TOKEN>`:
-
-```text
-https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
-```
-
-4. Open `.env` and fill in:
+2. Open `.env` and fill in:
 
 ```dotenv
 TELEGRAM_BOT_TOKEN=123456:your-token
-TELEGRAM_CHAT_ID=123456789
 ```
 
-5. Start the notifier:
+3. Start the notifier:
 
 ```bash
 docker compose up -d --build
 ```
+
+4. Each person who should receive vacancies opens the bot and sends `/start`. Their chat ID is saved automatically in the persistent Docker volume.
 
 Logs:
 
@@ -73,13 +67,14 @@ MAX_ITEMS_PER_POLL=20
 MAX_SUMMARY_CHARS=1200
 LOG_LEVEL=INFO
 TELEGRAM_BOT_TOKEN=your-real-token
-TELEGRAM_CHAT_ID=370838943
 ```
 
 6. Deploy the stack.
 7. Open stack logs and check for `Watching RSS feed`.
 
 No inbound port is needed. The container only makes outgoing requests to DOU RSS and Telegram API.
+
+`TELEGRAM_CHAT_ID` remains optional for existing deployments: its value is added to the subscriber list at startup. New users do not need to share their chat IDs; they only need to send `/start`.
 
 ## Run Without Docker
 

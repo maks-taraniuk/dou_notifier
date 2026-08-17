@@ -12,6 +12,8 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      SUBSCRIBERS_FILE: ${SUBSCRIBERS_FILE:-/data/subscribers.json}
+      TELEGRAM_UPDATE_OFFSET_FILE: ${TELEGRAM_UPDATE_OFFSET_FILE:-/data/telegram_updates.json}
     volumes:
       - dou-rss-data:/data
 
